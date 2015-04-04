@@ -10,3 +10,5 @@ Features:
 - for programmers: an easy to use MIDI interface for loading MIDI files into event objects and saving these. Loading works for type 0 and type 1 but they will internally get converted to type 1 and saved accordingly
 
 Remember, this is some code I originally wrote when I didn't have a lot of knowledge about programming and the code quality therefore isn't "great". I just put the code on GitHub for peeps who bight be interested in it (if there is 1 or 2 in the world)
+
+"midfix4agb" is released under the terms of GPLv3. See LICENSE.txt
