@@ -2,154 +2,185 @@
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using System.Diagnostics;
+using csmidi;
 
-namespace FileMIDI
+namespace midfix4agb
 {
     static class MidiFixer
     {
 
-        static public void addAgbCompatibleEvents(ref FileMIDI midiFile, byte modType)
+        static public void addAgbCompatibleEvents(MidiFile midiFile, byte modType)
         {
-            int[] channelNumber = new int[midiFile.MidiTracks.Count];
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
-            {
-                channelNumber[currentTrack] = getChannelNumberFromTrack(ref midiFile, currentTrack);
-            }
+            int[] channelNumber = new int[midiFile.midiTracks.Count];
+            for (int i = 0; i < midiFile.midiTracks.Count; i++)
+                channelNumber[i] = getChannelNumberFromTrack(midiFile.midiTracks[i]);
 
             // add all MODT events
 
-            Console.WriteLine("Adding MODT and LFOS Events...");
+            Debug.WriteLine("Adding MODT and LFOS Events...");
 
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
+            for (int i = 0; i < midiFile.midiTracks.Count; i++)
             {
-                if (channelNumber[currentTrack] == -1) continue;    // skip track if there is no regular MIDI commands
+                if (channelNumber[i] == -1) continue;    // skip track if there is no regular MIDI commands
                 // add a MODT controller event in the beginning of the track and LFOS
-                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(0, new MidiEvent(0, (byte)channelNumber[currentTrack], 21, 44, NormalType.Controller));
-                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(0, new MidiEvent(0, (byte)channelNumber[currentTrack], 22, modType, NormalType.Controller));
+                midiFile.midiTracks[i].midiEvents.Insert(
+                    0, new MessageMidiEvent(0, (byte)channelNumber[i], NormalType.Controller, 21, 44));
+                midiFile.midiTracks[i].midiEvents.Insert(
+                    0, new MessageMidiEvent(0, (byte)channelNumber[i], NormalType.Controller, 22, modType));
             }
 
-            Console.WriteLine("Adding BENDR Events...");
+            Debug.WriteLine("Adding BENDR Events...");
 
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
+            for (int currentTrack = 0; currentTrack < midiFile.midiTracks.Count; currentTrack++)
             {
+                MidiTrack trk = midiFile.midiTracks[currentTrack];
                 byte rpMSB = 0;
                 byte rpLSB = 0;
-                int newEventCount = midiFile.MidiTracks[currentTrack].MidiEvents.Count;
-                for (int currentEvent = 0; currentEvent < newEventCount; currentEvent++)
+                for (int currentEvent = 0; currentEvent < trk.midiEvents.Count; currentEvent++)
                 {
-                    byte[] eventData = midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getEventData();
-                    if (eventData[0] >> 4 == 0xB)
+                    MessageMidiEvent ev;
+                    if (trk.midiEvents[currentEvent] is MessageMidiEvent)
+                        ev = trk.midiEvents[currentEvent] as MessageMidiEvent;
+                    else
+                        continue;
+
+                    if (ev.type != NormalType.Controller)
+                        continue;
+
+                    switch (ev.parameter1)
                     {
-                        switch (eventData[1])
-                        {
-                            case 0x64:
-                                rpLSB = eventData[2];
-                                break;
-                            case 0x65:
-                                rpLSB = eventData[2];
-                                break;
-                            case 0x6:
-                                if (rpLSB == 0 && rpMSB == 0)
-                                {
-                                    // insert new event if right parameter slots are selected
-                                    midiFile.MidiTracks[currentTrack].MidiEvents.Insert(currentEvent, new MidiEvent(midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks(), (byte)channelNumber[currentTrack], 20, eventData[2], NormalType.Controller));
-                                    newEventCount++;    // extend the new event count because we added an event
-                                    currentEvent++;     // extend the current event because we added one event and don't want to check this one again
-                                }
-                                break;
-                            default:
-                                break;
-                        }
+                        case 0x64: // midi RP
+                            rpLSB = ev.parameter2;
+                            break;
+                        case 0x65: // midi RP
+                            rpLSB = ev.parameter2;
+                            break;
+                        case 0x6:  // midi data entry
+                            if (rpLSB == 0 && rpMSB == 0)
+                            {
+                                // insert new event if right parameter slots are selected
+                                long cTicks = ev.absoluteTicks;
+                                trk.midiEvents.Insert(currentEvent, new MessageMidiEvent(
+                                    cTicks, (byte)channelNumber[currentTrack], NormalType.Controller, 20, ev.parameter2));
+                                // extend the current event because we added one event and don't want to check this one again
+                                currentEvent++;
+                            }
+                            break;
+                        default:
+                            break;
                     }
                 }
             }
         }
 
-        static public void addModulationScale(ref FileMIDI midiFile, double modScale)
+        static public void addModulationScale(MidiFile midiFile, double modScale)
         {
-            Console.WriteLine("Adding Modulation Scale...");
+            Debug.WriteLine("Adding Modulation Scale...");
 
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
+            for (int currentTrack = 0; currentTrack < midiFile.midiTracks.Count; currentTrack++)
             {
-                for (int currentEvent = 0; currentEvent < midiFile.MidiTracks[currentTrack].MidiEvents.Count; currentEvent++)
+                MidiTrack trk = midiFile.midiTracks[currentTrack];
+                for (int currentEvent = 0; currentEvent < trk.midiEvents.Count; currentEvent++)
                 {
                     // get current Event data
-                    byte[] eventData = midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getEventData();
-                    if (eventData[0] >> 4 == 0xB)
-                    {
-                        if (eventData[1] == 0x1)
-                        {
-                            midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent] = new MidiEvent(midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks(), (byte)(eventData[0] & 0xF), eventData[1], Convert.ToByte(minMax(0, eventData[2] * modScale, 127)), NormalType.Controller);
-                        }
-                    }
+                    MessageMidiEvent ev;
+                    if (trk.midiEvents[currentEvent] is MessageMidiEvent)
+                        ev = trk.midiEvents[currentEvent] as MessageMidiEvent;
+                    else
+                        continue;
+
+                    if (ev.type != NormalType.Controller)
+                        continue;
+                    if (ev.parameter1 != 0x1) // midi mod controller event
+                        continue;
+
+                    long cTicks = ev.absoluteTicks;
+                    trk.midiEvents[currentEvent] = new MessageMidiEvent(
+                        cTicks, ev.midiChannel, NormalType.Controller, ev.parameter1, (byte)(minMax(0, ev.parameter2 * modScale, 127)));
                 }
             }
         }
 
-        static public void combineVolumeAndExpression(ref FileMIDI midiFile)
+        static public void combineVolumeAndExpression(MidiFile midiFile)
         {
-            Console.WriteLine("Combining Volume and Expression Events...");
+            Debug.WriteLine("Combining Volume and Expression Events...");
 
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
+            for (int currentTrack = 0; currentTrack < midiFile.midiTracks.Count; currentTrack++)
             {
+                MidiTrack trk = midiFile.midiTracks[currentTrack];
                 byte expressionLevel = 127;
                 byte volumeLevel = 127;
-                for (int currentEvent = 0; currentEvent < midiFile.MidiTracks[currentTrack].MidiEvents.Count; currentEvent++)
+                for (int currentEvent = 0; currentEvent < trk.midiEvents.Count; currentEvent++)
                 {
                     // get current Event data
-                    byte[] eventData = midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getEventData();
-                    if (eventData[0] >> 4 == 0xB)
+                    MessageMidiEvent ev;
+                    if (trk.midiEvents[currentEvent] is MessageMidiEvent)
+                        ev = trk.midiEvents[currentEvent] as MessageMidiEvent;
+                    else
+                        continue;
+
+                    if (ev.type != NormalType.Controller)
+                        continue;
+
+                    if (ev.parameter1 == 0x7)
                     {
-                        if (eventData[1] == 0x7)
-                        {
-                            volumeLevel = eventData[2];
-                            byte newLevel = (byte)(volumeLevel * expressionLevel / 127);
-                            midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent] = new MidiEvent(midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks(), (byte)(eventData[0] & 0xF), 0x7, newLevel, NormalType.Controller);
-                        }
-                        else if (eventData[1] == 0xB)
-                        {
-                            expressionLevel = eventData[2];
-                            byte newLevel = (byte)(volumeLevel * expressionLevel / 127);
-                            midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent] = new MidiEvent(midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks(), (byte)(eventData[0] & 0xF), 0x7, newLevel, NormalType.Controller);
-                        }
+                        volumeLevel = ev.parameter2;
+                        byte newLevel = (byte)(volumeLevel * expressionLevel / 127);
+                        long cTicks = trk.midiEvents[currentEvent].absoluteTicks;
+                        trk.midiEvents[currentEvent] = new MessageMidiEvent(cTicks, ev.midiChannel, NormalType.Controller, 0x7, newLevel);
+                    }
+                    else if (ev.parameter1 == 0xB)
+                    {
+                        expressionLevel = ev.parameter2;
+                        byte newLevel = (byte)(volumeLevel * expressionLevel / 127);
+                        long cTicks = trk.midiEvents[currentEvent].absoluteTicks;
+                        trk.midiEvents[currentEvent] = new MessageMidiEvent(cTicks, ev.midiChannel, NormalType.Controller, 0x7, newLevel);
                     }
                 }
             }
         }
 
-        static public void addExponentialScale(ref FileMIDI midiFile)
+        static public void addExponentialScale(MidiFile midiFile)
         {
-            Console.WriteLine("Applying exponential Volume and Velocity Scale...");
+            Debug.WriteLine("Applying exponential Volume and Velocity Scale...");
 
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
+            for (int currentTrack = 0; currentTrack < midiFile.midiTracks.Count; currentTrack++)
             {
-                for (int currentEvent = 0; currentEvent < midiFile.MidiTracks[currentTrack].MidiEvents.Count; currentEvent++)
+                MidiTrack trk = midiFile.midiTracks[currentTrack];
+                for (int currentEvent = 0; currentEvent < midiFile.midiTracks[currentTrack].midiEvents.Count; currentEvent++)
                 {
                     // get current Event data
-                    byte[] eventData = midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getEventData();
-                    if (eventData[0] >> 4 == 0xB)
+                    MessageMidiEvent ev;
+                    if (trk.midiEvents[currentEvent] is MessageMidiEvent)
+                        ev = trk.midiEvents[currentEvent] as MessageMidiEvent;
+                    else
+                        continue;
+
+                    if (ev.type == NormalType.Controller && ev.parameter1 == 0x7)
                     {
-                        if (eventData[1] == 0x7)
-                        {
-                            midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent] = new MidiEvent(midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks(), (byte)(eventData[0] & 0xF), 0x7, expVol(eventData[2]), NormalType.Controller);
-                        }
+                        long cTicks = trk.midiEvents[currentEvent].absoluteTicks;
+                        trk.midiEvents[currentEvent] = new MessageMidiEvent(
+                            cTicks, ev.midiChannel, NormalType.Controller, 0x7, expVol(ev.parameter2));
                     }
-                    if (eventData[0] >> 4 == 0x9)
+                    if (ev.type == NormalType.NoteON)
                     {
-                        midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent] = new MidiEvent(midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks(), (byte)(eventData[0] & 0xF), eventData[1], expVol(eventData[2]), NormalType.NoteON);
+                        long cTicks = trk.midiEvents[currentEvent].absoluteTicks;
+                        trk.midiEvents[currentEvent] = new MessageMidiEvent(
+                            cTicks, ev.midiChannel, NormalType.NoteON, ev.parameter1, expVol(ev.parameter2));
                     }
                 }
             }
         }
 
-        static public void removeRedundantMidiEvents(ref FileMIDI midiFile)
+        static public void removeRedundantMidiEvents(MidiFile midiFile)
         {
 
         }
 
-        static public void fixLoopCarryBack(ref FileMIDI midiFile)
+        static public void fixLoopCarryBack(MidiFile midiFile)
         {
-            Console.WriteLine("Fixing Loop Carryback Errors...");
+            Debug.WriteLine("Fixing Loop Carryback Errors...");
             // first of all we need to check if the MIDI actually loops
             // we only have to check the first track for the [ ] brackets in the marker Events
             bool hasLoopStart = false;
@@ -157,82 +188,75 @@ namespace FileMIDI
             bool hasLoopEnd = false;
             long loopEndTick = 0;
 
-            for (int currentEvent = 0; currentEvent < midiFile.MidiTracks[0].MidiEvents.Count; currentEvent++)
+            if (midiFile.midiTracks.Count == 0)
+                return;
+            MidiTrack metaTrack = midiFile.midiTracks[0];
+
+            for (int currentEvent = 0; currentEvent < metaTrack.midiEvents.Count; currentEvent++)
             {
-                byte[] eventData = midiFile.MidiTracks[0].MidiEvents[currentEvent].getEventData();
-                if (eventData[0] == 0xFF)   // if event is META
+                byte[] eventData = metaTrack.midiEvents[currentEvent].getEventData();
+                if (eventData[0] != 0xFF || eventData[1] != 0x6)   // if event is META and marker type
+                    continue;
+
+                if (eventData[2] == 0x1 && Encoding.ASCII.GetString(eventData, 3, 1) == "[")
                 {
-                    if (eventData[1] == 0x6)    // if event is Marker
-                    {
-                        if (eventData[2] == 0x1 && Encoding.ASCII.GetString(eventData, 3, 1) == "[")
-                        {
-                            hasLoopStart = true;
-                            loopStartTick = midiFile.MidiTracks[0].MidiEvents[currentEvent].getAbsoluteTicks();
-                        }
-                        else if (eventData[2] == 0x1 && Encoding.ASCII.GetString(eventData, 3, 1) == "]")
-                        {
-                            hasLoopEnd = true;
-                            loopEndTick = midiFile.MidiTracks[0].MidiEvents[currentEvent].getAbsoluteTicks();
-                        }
-                    }
+                    hasLoopStart = true;
+                    loopStartTick = metaTrack.midiEvents[currentEvent].absoluteTicks;
+                }
+                else if (eventData[2] == 0x1 && Encoding.ASCII.GetString(eventData, 3, 1) == "]")
+                {
+                    hasLoopEnd = true;
+                    loopEndTick = metaTrack.midiEvents[currentEvent].absoluteTicks;
                 }
             }
+
             // we now got the loop points if there are any
             if (hasLoopStart == false || hasLoopEnd == false)
             {
-                Console.WriteLine("MIDI is not looped!");
+                Debug.WriteLine("MIDI is not looped!");
                 return;
             }
-            // now the carryback prevention is done because the program will return if there is no loop to fix
-            for (int currentTrack = 0; currentTrack < midiFile.MidiTracks.Count; currentTrack++)
+            // now the carryback prevention is done
+            for (int currentTrack = 0; currentTrack < midiFile.midiTracks.Count; currentTrack++)
             {
-                int midiChannel = getChannelNumberFromTrack(ref midiFile, currentTrack);    // first of all we need to get the midi channel on the current track
+                MidiTrack trk = midiFile.midiTracks[currentTrack];
+                int midiChannel = getChannelNumberFromTrack(trk);    // first of all we need to get the midi channel on the current track
 
                 agbControllerState loopStartState = new agbControllerState();
-                agbControllerState loopEndState = new agbControllerState();
 
-                if (midiFile.MidiTracks[currentTrack].MidiEvents.Count == 0) continue;  // skip the track if it has no events
-                if (midiChannel == -1 && currentTrack != 0) continue;       // skip track if it has no midi events and we don't need to consider the tempo track
+                if (trk.midiEvents.Count == 0)
+                    continue;  // skip the track if it has no events
+                if (midiChannel == -1 && currentTrack != 0)
+                    continue;       // skip track if it has no midi events and we don't need to consider the tempo track
 
-                int eventAtLoopStart = midiFile.MidiTracks[currentTrack].MidiEvents.Count - 1;
+                int eventAtLoopStart = trk.midiEvents.Count - 1;
 
                 #region recordStartState
-                for (int currentEvent = 0; currentEvent < midiFile.MidiTracks[currentTrack].MidiEvents.Count; currentEvent++)
+                for (int currentEvent = 0; currentEvent < trk.midiEvents.Count; currentEvent++)
                 {
                     // now all events get recorded on continously update the loop start state
-                    if (midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks() > loopStartTick)
+                    if (trk.midiEvents[currentEvent].absoluteTicks > loopStartTick)
                     {
                         eventAtLoopStart = currentEvent;
                         break;
                     }
-                    byte[] eventData = midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getEventData();
-                    if (eventData[0] == 0xFF)   // check if META tempo event occurs
+                    byte[] eventData = trk.midiEvents[currentEvent].getEventData();
+                    if (eventData[0] == 0xFF && eventData[1] == 0x51)   // check if META tempo event occurs
                     {
-                        if (eventData[1] == 0x51)   // ist META event a Tempo event?
-                        {
-                            loopStartState.Tempo[0] = eventData[3]; // set all tempo values
-                            loopStartState.Tempo[1] = eventData[4];
-                            loopStartState.Tempo[2] = eventData[5];
-                        }
+                        loopStartState.Tempo[0] = eventData[3]; // set all tempo values
+                        loopStartState.Tempo[1] = eventData[4];
+                        loopStartState.Tempo[2] = eventData[5];
                     }
                     else if (eventData[0] >> 4 == 0xB)  // is event a controller event?
                     {
                         if (eventData[1] == 0x1)    // if MOD controller
-                        {
                             loopStartState.Mod = eventData[2];  // save mod state
-                        }
                         else if (eventData[1] == 0x7)
-                        {
                             loopStartState.Volume = eventData[2];   // save volume state
-                        }
                         else if (eventData[1] == 0xA)
-                        {
                             loopStartState.Pan = eventData[2];  // save pan position
-                        }
                         else if (eventData[1] == 0x14)
-                        {
                             loopStartState.BendR = eventData[2];    // save pseudo AGB bendr
-                        }
                     }
                     else if (eventData[0] >> 4 == 0xC)      // if voice change event
                     {
@@ -245,48 +269,41 @@ namespace FileMIDI
                     }
                 }
                 #endregion
-                loopEndState = (agbControllerState)loopStartState.Clone();  // override all changes from the loop start state to the loop end state so we can continue on with checking the trackdata for carryback errors we need to correct     
+                /* override all changes from the loop start state to the loop end state so we can
+                 * continue on with checking the trackdata for carryback errors we need to correct
+                 */
+                agbControllerState loopEndState = (agbControllerState)loopStartState.Clone();
                 // recorded loop start state, now record until 
 
-                int eventAtLoopEnd = midiFile.MidiTracks[currentTrack].MidiEvents.Count;
+                int eventAtLoopEnd = trk.midiEvents.Count;
 
                 #region recordLoopEndState
-                for (int currentEvent = eventAtLoopStart; currentEvent < midiFile.MidiTracks[currentTrack].MidiEvents.Count; currentEvent++)
+                for (int currentEvent = eventAtLoopStart; currentEvent < trk.midiEvents.Count; currentEvent++)
                 {
                     // now all events get recorded on continously update the loop start state
-                    if (midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getAbsoluteTicks() >= loopEndTick)
+                    if (trk.midiEvents[currentEvent].absoluteTicks >= loopEndTick)
                     {
-                        eventAtLoopEnd = currentEvent;      // if the loop end occurs before the end of the event data set it's value manually
+                        // if the loop end occurs before the end of the event data set it's value manually
+                        eventAtLoopEnd = currentEvent;
                         break;
                     }
-                    byte[] eventData = midiFile.MidiTracks[currentTrack].MidiEvents[currentEvent].getEventData();
-                    if (eventData[0] == 0xFF)   // check if META tempo event occurs
+                    byte[] eventData = trk.midiEvents[currentEvent].getEventData();
+                    if (eventData[0] == 0xFF && eventData[1] == 0x51)   // check if META tempo event occurs
                     {
-                        if (eventData[1] == 0x51)   // ist META event a Tempo event?
-                        {
-                            loopEndState.Tempo[0] = eventData[3]; // set all tempo values
-                            loopEndState.Tempo[1] = eventData[4];
-                            loopEndState.Tempo[2] = eventData[5];
-                        }
+                        loopEndState.Tempo[0] = eventData[3]; // set all tempo values
+                        loopEndState.Tempo[1] = eventData[4];
+                        loopEndState.Tempo[2] = eventData[5];
                     }
                     else if (eventData[0] >> 4 == 0xB)  // is event a controller event?
                     {
-                        if (eventData[1] == 0x1)    // if MOD controller
-                        {
-                            loopEndState.Mod = eventData[2];  // save mod state
-                        }
+                        if (eventData[1] == 0x1)
+                            loopEndState.Mod = eventData[2];      // save mod state
                         else if (eventData[1] == 0x7)
-                        {
                             loopEndState.Volume = eventData[2];   // save volume state
-                        }
                         else if (eventData[1] == 0xA)
-                        {
-                            loopEndState.Pan = eventData[2];  // save pan position
-                        }
+                            loopEndState.Pan = eventData[2];      // save pan position
                         else if (eventData[1] == 0x14)
-                        {
                             loopEndState.BendR = eventData[2];    // save pseudo AGB bendr
-                        }
                     }
                     else if (eventData[0] >> 4 == 0xC)      // if voice change event
                     {
@@ -302,116 +319,89 @@ namespace FileMIDI
 
                 // now we need to fill in the events at the loop end event slot "eventAtLoopEnd"
                 // check if the values vary and set them accordingly
-                if (Enumerable.SequenceEqual(loopStartState.Tempo, loopEndState.Tempo) == false) // check if tempo is the same
+                if (!Enumerable.SequenceEqual(loopStartState.Tempo, loopEndState.Tempo) &&
+                    loopStartState.Tempo[0] != 0 && loopStartState.Tempo[1] != 0 && loopStartState.Tempo[2] != 0)
                 {
-                    if (loopStartState.Tempo[0] != 0 && loopStartState.Tempo[1] != 0 && loopStartState.Tempo[2] != 0)   // don't fix it if the tempo is not set to a valid value
-                    {
-                        if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                        {
-                            midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, 0x51, loopStartState.Tempo, true));
-                        }
-                        else
-                        {
-                            midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, 0x51, loopStartState.Tempo, true));
-                        }
-                    }
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MetaMidiEvent(loopStartTick, 0x51, loopStartState.Tempo));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MetaMidiEvent(loopStartTick, 0x51, loopStartState.Tempo));
                 }
-                if (midiChannel != -1)     // only do this fixing if the midi channel is actually defined (META only tracks are skipped here)
+                // only do this fixing if the midi channel is actually defined (META only tracks are skipped here)
+                if (midiChannel == -1)
+                    continue;
+
+                // only fix if voice is a valid voice number (0-127)
+                if (loopStartState.Voice != loopEndState.Voice && loopStartState.Voice != 0xFF)
                 {
-                    if (loopStartState.Voice != loopEndState.Voice)
-                    {
-                        if (loopStartState.Voice != 0xFF)   // only fix if voice is a valid voice number (0-127)
-                        {
-                            if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, (byte)midiChannel, loopStartState.Voice, 0x0, NormalType.Program));
-                            }
-                            else
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, (byte)midiChannel, loopStartState.Voice, 0x0, NormalType.Program));
-                            }
-                        }
-                    }
-                    if (loopStartState.Volume != loopEndState.Volume)      // fix volume
-                    {
-                        if (loopStartState.Volume != 0xFF)
-                        {
-                            if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, (byte)midiChannel, 0x7, loopStartState.Volume, NormalType.Controller));
-                            }
-                            else
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, (byte)midiChannel, 0x7, loopStartState.Volume, NormalType.Controller));
-                            }
-                        }
-                    }
-                    if (loopStartState.Pan != loopEndState.Pan)      // fix PAN
-                    {
-                        if (loopStartState.Pan != 0xFF)
-                        {
-                            if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, (byte)midiChannel, 0xA, loopStartState.Pan, NormalType.Controller));
-                            }
-                            else
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, (byte)midiChannel, 0xA, loopStartState.Pan, NormalType.Controller));
-                            }
-                        }
-                    }
-                    if (loopStartState.BendR != loopEndState.BendR)      // fix BENDR
-                    {
-                        if (loopStartState.BendR != 0xFF)
-                        {
-                            if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, (byte)midiChannel, 20, loopStartState.BendR, NormalType.Controller));
-                            }
-                            else
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, (byte)midiChannel, 20, loopStartState.BendR, NormalType.Controller));
-                            }
-                        }
-                    }
-                    if (loopStartState.Mod != loopEndState.Mod)      // fix MOD
-                    {
-                        if (loopStartState.Mod != 0xFF)
-                        {
-                            if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, (byte)midiChannel, 0x1, loopStartState.Mod, NormalType.Controller));
-                            }
-                            else
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, (byte)midiChannel, 0x1, loopStartState.Mod, NormalType.Controller));
-                            }
-                        }
-                    }
-                    if (loopStartState.BendLSB != loopEndState.BendLSB || loopStartState.BendMSB != loopEndState.BendMSB)      // fix BEND
-                    {
-                        if (loopStartState.BendLSB != 0xFF) // we don't need to check MSB because if this one isn't 0xFF the other one won't be 0xFF either
-                        {
-                            if (eventAtLoopStart >= midiFile.MidiTracks[currentTrack].MidiEvents.Count)
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Add(new MidiEvent(loopStartTick, (byte)midiChannel, loopStartState.BendLSB, loopStartState.BendMSB, NormalType.PitchBend));
-                            }
-                            else
-                            {
-                                midiFile.MidiTracks[currentTrack].MidiEvents.Insert(eventAtLoopStart, new MidiEvent(loopStartTick, (byte)midiChannel, loopStartState.BendLSB, loopStartState.BendMSB, NormalType.PitchBend));
-                            }
-                        }
-                    }
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Program, loopStartState.Voice, 0x0));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Program, loopStartState.Voice, 0x0));
+                }
+                // fix volume
+                if (loopStartState.Volume != loopEndState.Volume && loopStartState.Volume != 0xFF)
+                {
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 0x7, loopStartState.Volume));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 0x7, loopStartState.Volume));
+                }
+                // fix PAN
+                if (loopStartState.Pan != loopEndState.Pan && loopStartState.Pan != 0xFF)
+                {
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 0xA, loopStartState.Pan));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 0xA, loopStartState.Pan));
+                }
+                // fix BENDR
+                if (loopStartState.BendR != loopEndState.BendR && loopStartState.BendR != 0xFF)
+                {
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 20, loopStartState.BendR));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 20, loopStartState.BendR));
+                }
+                // fix MOD
+                if (loopStartState.Mod != loopEndState.Mod && loopStartState.Mod != 0xFF)
+                {
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 0x1, loopStartState.Mod));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.Controller, 0x1, loopStartState.Mod));
+                }
+                // fix BEND
+                if ((loopStartState.BendLSB != loopEndState.BendLSB ||
+                    loopStartState.BendMSB != loopEndState.BendMSB) &&
+                    loopStartState.BendLSB != 0xFF)
+                {
+                    if (eventAtLoopStart >= trk.midiEvents.Count)
+                        trk.midiEvents.Add(new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.PitchBend, loopStartState.BendLSB, loopStartState.BendMSB));
+                    else
+                        trk.midiEvents.Insert(eventAtLoopStart, new MessageMidiEvent(
+                            loopStartTick, (byte)midiChannel, NormalType.PitchBend, loopStartState.BendLSB, loopStartState.BendMSB));
                 }
             }
         }
 
-        static int getChannelNumberFromTrack(ref FileMIDI midiFile, int trackNumber)
+        static int getChannelNumberFromTrack(MidiTrack trk)
         {
             int channelNumber = -1;
-            for (int currentEvent = 0; currentEvent < midiFile.MidiTracks[trackNumber].MidiEvents.Count; currentEvent++)
+            foreach (MidiEvent ev in trk.midiEvents)
             {
-                byte[] eventData = midiFile.MidiTracks[trackNumber].MidiEvents[currentEvent].getEventData();
+                byte[] eventData = ev.getEventData();
                 if ((eventData[0] >> 4) <= 0xE & (eventData[0] >> 4) >= 0x8)
                 {
                     channelNumber = eventData[0] & 0xF;
@@ -423,18 +413,23 @@ namespace FileMIDI
 
         static double minMax(double minVal, double val, double maxVal)
         {
-            if (val < minVal) val = minVal;
-            else if (val > maxVal) val = maxVal;
+            if (val < minVal)
+                val = minVal;
+            else if (val > maxVal)
+                val = maxVal;
             return val;
         }
 
         static byte expVol(byte volume)
         {
             double returnValue = volume;
-            if (returnValue == 0) return 0;
-            returnValue /= 127;
+            if (returnValue == 0)
+                return 0;
+            returnValue /= 127.0;
             returnValue = Math.Pow(returnValue, 10.0 / 6.0);
-            return Convert.ToByte(returnValue * 127);
+            returnValue *= 127.0;
+            returnValue = Math.Round(returnValue, MidpointRounding.AwayFromZero);
+            return Convert.ToByte(returnValue);
         }
     }
 
@@ -447,17 +442,17 @@ namespace FileMIDI
             Tempo[1] = 0x0;
             Tempo[2] = 0x0;
             Voice = 0xFF;
-            Volume = 0x7F;
-            Pan = 0x40;
+            Volume = 0xFF;
+            Pan = 0xFF;
             BendR = 0xFF;
             BendMSB = 0xFF;
             BendLSB = 0xFF;
-            Mod = 0x00;
+            Mod = 0xFF;
         }
 
         public object Clone()
         {
-            return this.MemberwiseClone();
+            return MemberwiseClone();
         }
 
         public byte[] Tempo { get; set; }
