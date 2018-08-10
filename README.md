@@ -1,5 +1,7 @@
 # midfix4agb
 
+## THIS PROJECT IS OBSOLETE. YOU PROBABLY WANT TO USE "midi2agb" directly
+
 "midfix4agb" is a utility program in C# I wrote to make inserting MIDI files into GBA games with the mp2k driver easier. This program is made to "post-process" a MIDI before isnertion. 
 
 Features:
